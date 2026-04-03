@@ -7,7 +7,12 @@ const https = require("https");
  * Mirrors the Go and JS client logic exactly.
  */
 async function fetchSecrets(url, accessKeyId, secretAccessKey) {
-  const endpoint = `${url.replace(/\/+$/, "")}/secrets`;
+  // Auto-add https:// if no protocol is present
+  let normalizedUrl = url.replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(normalizedUrl)) {
+    normalizedUrl = `https://${normalizedUrl}`;
+  }
+  const endpoint = `${normalizedUrl}/secrets`;
   const credentials = Buffer.from(
     `${accessKeyId}:${secretAccessKey}`
   ).toString("base64");
