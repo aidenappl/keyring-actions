@@ -32,13 +32,10 @@ inputs:
 outputs:
   secrets-json:
     description: "JSON object of all fetched secrets (masked). Use fromJSON() to access individual keys."
-    value: ${{ steps.fetch.outputs.secrets-json }}
   build-args:
     description: "Newline-delimited KEY=VALUE string ready for docker/build-push-action build-args input."
-    value: ${{ steps.fetch.outputs.build-args }}
   keys:
     description: "Comma-separated list of secret key names that were fetched."
-    value: ${{ steps.fetch.outputs.keys }}
 
 runs:
   using: "node20"
