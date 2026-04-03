@@ -1,0 +1,45 @@
+name: "Keyring — Inject Secrets"
+description: "Fetches secrets from the Keyring API and injects them as environment variables, outputs, and Docker build-args."
+author: "aidenappl"
+
+branding:
+  icon: "lock"
+  color: "blue"
+
+inputs:
+  url:
+    description: "Base URL of the Keyring API (no trailing slash)"
+    required: true
+  access-key-id:
+    description: "Keyring token access key ID"
+    required: true
+  secret-access-key:
+    description: "Keyring token secret access key"
+    required: true
+  export-env:
+    description: "Export each secret as an environment variable for subsequent steps (default: true)"
+    required: false
+    default: "true"
+  mask:
+    description: "Mask secret values in logs (default: true)"
+    required: false
+    default: "true"
+  filter:
+    description: "Comma-separated list of key names to export. If empty, all secrets are exported."
+    required: false
+    default: ""
+
+outputs:
+  secrets-json:
+    description: "JSON object of all fetched secrets (masked). Use fromJSON() to access individual keys."
+    value: ${{ steps.fetch.outputs.secrets-json }}
+  build-args:
+    description: "Newline-delimited KEY=VALUE string ready for docker/build-push-action build-args input."
+    value: ${{ steps.fetch.outputs.build-args }}
+  keys:
+    description: "Comma-separated list of secret key names that were fetched."
+    value: ${{ steps.fetch.outputs.keys }}
+
+runs:
+  using: "node20"
+  main: "dist/index.js"

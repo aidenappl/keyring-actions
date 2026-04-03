@@ -1,0 +1,19 @@
+{
+  "name": "keyring-actions",
+  "version": "1.0.0",
+  "description": "GitHub Action to inject Keyring secrets into workflows",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "ncc build src/index.js -o dist --minify",
+    "check": "node src/index.js || true"
+  },
+  "keywords": ["github-actions", "keyring", "secrets"],
+  "author": "aidenappl",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.11.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.0"
+  }
+}
