@@ -154,10 +154,11 @@ node --check dist/index.js  # syntax-check the shipped artifact
 ### ⚠️ The `dev release` command force-pushes and moves `v1`
 
 `Devfile.yaml`'s `release` command **runs `git push origin main` and `git push origin v1
---force`**. Per the global guardrails, **you (an agent) never push.** Do not run `dev release`.
-Build and commit `dist/` if asked, then stop and let Aiden run the release. The force-moving of
-the `v1` tag is how consumers on `@v1` receive updates — it is deliberate, but it is a
-human-initiated action.
+--force`**. Force-pushing is banned for agents regardless of approval, so **do not run `dev
+release`**. A plain `git push` of `main` is allowed **only after asking Aiden and getting an
+explicit yes** (see `~/CLAUDE.md` *Ask-first actions*); moving the `v1` tag stays with Aiden. The
+force-moving of the `v1` tag is how consumers on `@v1` receive updates — it is deliberate, but it
+is a human-initiated action.
 
 ## How code is written here
 
@@ -300,8 +301,10 @@ action, `keyring-js`, and `go-keyring` all break together and must change togeth
 - **Always rebuild and commit `dist/` when you touch `src/`** — same change, not a follow-up.
   The runner executes `dist/index.js`; an un-rebuilt `dist/` silently ships stale code.
 - **Never hand-edit `dist/index.js`.** It is generated. Edit `src/`, run `npm run build`.
-- **Do not push and do not run `dev release`** — it force-pushes `main` and force-moves the `v1`
-  tag. That is Aiden's call. Build/commit locally at most, then stop.
+- **Never run `dev release`** — it force-pushes `main` and force-moves the `v1` tag, and
+  force-pushing is banned regardless of approval. Commit, plain `git push` and merge are allowed
+  **only after asking Aiden and getting an explicit yes** for that specific action (see
+  `~/CLAUDE.md` *Ask-first actions*). **Never** amend, rebase, or run destructive git ops.
 - **Keep the request path exactly `GET {url}/secrets` with HTTP Basic.** It is a shared contract
   with `keyring-api`, `keyring-js`, and `go-keyring`.
 - **Don't add runtime dependencies casually** — the zero-dep HTTP client is intentional.
