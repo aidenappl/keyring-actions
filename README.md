@@ -78,6 +78,16 @@ Feeding secrets into a Docker build via the `build-args` output:
 | `export-env` | no | `"true"` | Export each secret as an environment variable for subsequent steps. Any value other than the literal string `"false"` counts as true. |
 | `mask` | no | `"true"` | Mask secret values in logs via `core.setSecret()`. Any value other than the literal string `"false"` counts as true. |
 | `filter` | no | `""` | Comma-separated list of key names to export. If empty, all secrets the token can read are exported. |
+| `retries` | no | `"4"` | Extra attempts after the first on a transient failure (5 attempts total). `0` disables retrying. Integer 0–10. |
+| `retry-delay-ms` | no | `"2000"` | Base backoff in ms; doubles each retry with jitter, capped at 30 s. Integer 0–30000. |
+
+### Retries
+
+The fetch retries transient failures — timeouts, connection resets/refusals, DNS errors, and HTTP
+408/429/502/503/504/520–524 (Cloudflare) — with exponential backoff and jitter (~2 s, 4 s, 8 s,
+16 s by default; `Retry-After` is honoured up to 30 s). Each retry logs a `::warning::` with the
+attempt number and error only. **401/403/404, other 4xx, 500 and malformed responses fail
+immediately.** With the defaults the step gives up after roughly 80 s at worst.
 
 ## Outputs
 
@@ -114,6 +124,7 @@ workflow.
 npm install
 npm run build                 # ncc bundles src/index.js → dist/index.js
 node --check dist/index.js    # syntax-check the shipped artifact
+npm test                      # node:test suite (retry matrix + e2e run of dist/)
 git add dist/                 # commit the regenerated bundle
 ```
 

@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "build": "ncc build src/index.js -o dist --minify",
-    "check": "node src/index.js || true"
+    "check": "node src/index.js || true",
+    "test": "node --test test/*.test.js"
   },
   "keywords": ["github-actions", "keyring", "secrets"],
   "author": "aidenappl",

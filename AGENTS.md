@@ -63,25 +63,27 @@ GitHub Actions input/output contract.
 - **Build tool:** [`@vercel/ncc`](https://www.npmjs.com/package/@vercel/ncc) `^0.38.0`
   (devDependency) — bundles `src/index.js` **plus all of `node_modules`** into a single
   self-contained `dist/index.js`, so the runner never runs `npm install`.
-- **No tests, no linter, no framework.** `node --check` is the only static gate (see
-  *Verification*).
+- **Tests:** Node's built-in `node:test` runner (`npm test` / `dev test`) — no test framework
+  dependency. `test/fetch.test.js` drives the retry logic against a local `http` server and runs
+  the **built `dist/index.js`** end-to-end with `INPUT_*` env vars. No linter.
 
 ## Project structure
 
 | Path | Role |
 |------|------|
 | `action.yml` | **THE contract.** Declares metadata, `inputs`, `outputs`, and `runs` (Node 20 → `dist/index.js`). Editing this changes how every consumer calls the action. |
-| `src/index.js` | The actual source (~170 lines). `fetchSecrets()` + `run()`. **This is what you edit.** |
+| `src/index.js` | The action entrypoint: `run()` — reads inputs, masks, exports, sets outputs. |
+| `src/fetch.js` | The HTTP client: `fetchSecrets()` (with retry/backoff), `fetchOnce()`, input parsing helpers. Kept separate from `run()` so it can be unit-tested without the Actions runtime. |
+| `test/fetch.test.js` | `node:test` suite — retry/no-retry matrix, backoff math, log-leak check, and an end-to-end run of `dist/index.js`. |
 | `dist/index.js` | **Committed build output** produced by `ncc`. ~490 KB (bundles `@actions/core`). **This is what GitHub actually runs.** Never hand-edit; always regenerate via `npm run build`. |
 | `package.json` | `build` and `check` scripts; deps. `main` points at `src/index.js` (informational — the runner ignores it and uses `action.yml`). |
 | `package-lock.json` | Locked dependency tree. |
-| `Devfile.yaml` | The `dev` CLI commands for this repo — `build`, `release`, `install` (see below). |
+| `Devfile.yaml` | The `dev` CLI commands for this repo — `build`, `test`, `release`, `install` (see below). |
 | `.gitignore` | Standard Node ignores, **but explicitly does NOT ignore `dist/`** — there is a comment on line 92 saying so. Respect it. |
 | `.gitattributes` | LF normalization. |
 | `README.md` | Currently a stub (just the title). Worth expanding, but not load-bearing. |
 
-There is intentionally no `.github/workflows/` and no test directory. The action is small enough
-to be one source file.
+There is intentionally no `.github/workflows/`. Tests run locally (`dev test`).
 
 ## The `action.yml` contract
 
@@ -104,6 +106,8 @@ This is the public API of the repo. Every field below is consumed by workflows y
 | `export-env` | no | `"true"` | If not the literal string `"false"`, each fetched secret is exported as an env var (`core.exportVariable`) for **subsequent** steps. Any value other than `"false"` counts as true. |
 | `mask` | no | `"true"` | If not the literal string `"false"`, each secret value is registered with `core.setSecret()` so GitHub redacts it in logs. **Only turn this off if you have an extraordinary reason — see the masking warning.** |
 | `filter` | no | `""` | Comma-separated allowlist of key names to export. Empty means "all secrets the token can read". Whitespace around names is trimmed. |
+| `retries` | no | `"4"` | Extra attempts after the first when the fetch fails **transiently** (5 attempts total by default). `0` disables retrying. Integer 0–10; anything else fails the step. See *Retry behaviour*. |
+| `retry-delay-ms` | no | `"2000"` | Base backoff. Retry *n* waits a jittered value in `[d/2, d]`, `d = min(retry-delay-ms × 2^(n-1), 30000)`. Integer 0–30000. |
 
 Inputs are strings only (GitHub Actions has no typed inputs) — the boolean-ish inputs are
 compared against the literal string `"false"`.
@@ -133,6 +137,7 @@ This repo uses the `dev` CLI via `Devfile.yaml`. The commands are thin wrappers 
 ```bash
 dev install     # npm install
 dev build       # npm run build  → ncc bundles src/index.js into dist/index.js
+dev test        # npm run build && npm test (node:test; the e2e test runs dist/)
 dev release      # build + commit + move v1 tag + push (see the warning below)
 ```
 
@@ -145,11 +150,12 @@ node --check dist/index.js  # syntax-check the shipped artifact
 ```
 
 - **`npm run check`** runs `node src/index.js || true` — this does almost nothing useful outside
-  a runner (there are no inputs, no `GITHUB_*` env), it just proves the file loads. Real
-  verification is `node --check` + a live workflow run.
-- There is **no local unit-test harness.** The only faithful test is running the action inside an
-  actual workflow against a real (or staging) Keyring token, or invoking `dist/index.js` with the
-  Actions env vars set (`INPUT_URL`, `INPUT_ACCESS-KEY-ID`, etc.) — fiddly and rarely worth it.
+  a runner (there are no inputs, no `GITHUB_*` env), it just proves the file loads.
+- **`npm test`** runs `node --test test/*.test.js`. It needs no network and no credentials: a
+  local `http` server plays `keyring-api` (including 5xx/timeouts/hang-ups), and the end-to-end
+  test spawns `dist/index.js` with `INPUT_*`/`GITHUB_ENV`/`GITHUB_OUTPUT` set and asserts the
+  `::add-mask::` commands. **Build before testing** — the e2e test exercises `dist/`, so a stale
+  bundle fails it.
 
 ### ⚠️ The `dev release` command force-pushes and moves `v1`
 
@@ -162,9 +168,9 @@ is a human-initiated action.
 
 ## How code is written here
 
-`src/index.js` is two functions:
+`src/fetch.js` holds the HTTP client; `src/index.js` holds `run()`.
 
-### `fetchSecrets(url, accessKeyId, secretAccessKey)`
+### `fetchSecrets(url, accessKeyId, secretAccessKey, opts)` (`src/fetch.js`)
 
 - **URL normalization:** strips trailing slashes (`/\/+$/`), and if there is no `http(s)://`
   scheme it prepends `https://`. So `keys.appleby.cloud`, `https://keys.appleby.cloud`, and
@@ -175,30 +181,56 @@ is a human-initiated action.
   logic exactly"; keep that true.
 - **Transport:** Node built-in `http`/`https` chosen by URL scheme — no `fetch`, no `axios`, no
   dependency. This keeps the bundle tiny and the action fast.
-- **Guards:** 10 s request timeout; a 32 MiB response-size cap (`MAX_BYTES = 32 << 20`) that
-  destroys the request if exceeded.
+- **Guards:** 10 s per-attempt request timeout; a 32 MiB response-size cap
+  (`MAX_BYTES = 32 << 20`) that destroys the request if exceeded.
 - **Status handling:** `401`/`403` → a clear "unauthorized — credentials invalid or token
   inactive" error; any non-`200` → "unexpected status N"; network error/timeout → "API
   unavailable".
+- **Retries:** see *Retry behaviour* below. `fetchOnce()` makes one request and rejects with a
+  `KeyringError` carrying `retryable`; `fetchSecrets()` loops over it.
 - **Response parsing:** expects `{ "data": [ { "key": ..., "value": ... }, ... ] }` (the standard
   Keyring `/secrets` envelope) and flattens it to `{ key: value }`. A parse failure becomes
   "malformed response from API".
 
-### `run()`
+### Retry behaviour
+
+The appleby.cloud origin is on-prem behind Cloudflare on a single WAN, and a few percent of
+requests intermittently time out or come back as Cloudflare 522. A single blip used to fail the
+whole CI run (`keyring: API unavailable: request timed out`), so the fetch retries:
+
+- **Retried:** request timeout; socket errors `ECONNRESET`, `ECONNREFUSED`, `ECONNABORTED`,
+  `ETIMEDOUT`, `EPIPE`, `EAI_AGAIN`, `ENOTFOUND`, `EHOSTUNREACH`, `ENETUNREACH`, `ENETDOWN`;
+  "socket hang up"; a response stream aborted mid-body; HTTP **408, 429, 502, 503, 504,
+  520–524**.
+- **Never retried:** 401/403 (unauthorized), 404 and every other 4xx, 500, a malformed 200 body,
+  an over-size body. These are configuration or server bugs — retrying only delays the failure.
+- **Backoff:** exponential with equal jitter — retry *n* waits `[d/2, d]` with
+  `d = min(retry-delay-ms × 2^(n-1), 30 s)`. A `Retry-After` header (429/503) raises the wait to
+  that value, still capped at 30 s. Defaults (4 retries, 2 s base, 10 s timeout) bound the worst
+  case at 5 × 10 s + 2+4+8+16 s ≈ 80 s.
+- **Logging:** each retry emits one `core.warning` —
+  `keyring: attempt 1/5 failed (keyring: unexpected status 522); retrying in 1.7s` — so flakiness
+  shows up as an annotation on the run. It contains the error and timing only, never a credential
+  or value (a test asserts this). The final error gets `(gave up after N attempts)` appended.
+- Retrying a `GET /secrets` is safe: it is read-only. Each attempt that reaches `keyring-api`
+  writes its own `access_logs` row, so a retried run can show 2+ reads.
+
+### `run()` (`src/index.js`)
 
 The action lifecycle, wrapped in try/catch so any throw becomes `core.setFailed(error.message)`
 (which fails the step):
 
-1. Read the three required inputs + the three optional ones.
-2. **`core.setSecret()` on both credentials immediately** — before any network call — so they
-   can never surface in a log.
-3. Fetch all secrets.
-4. Apply the `filter` allowlist if provided.
-5. **`core.setSecret()` on every value** (when `mask` is on).
-6. **`core.exportVariable()` each secret** (when `export-env` is on) — makes them env vars for
+1. Read the three required inputs.
+2. **`core.setSecret()` on both credentials immediately** — before any other input parsing or
+   network call — so they can never surface in a log.
+3. Read the optional inputs (`retries`/`retry-delay-ms` are validated; bad values fail the step).
+4. Fetch all secrets (with retries).
+5. Apply the `filter` allowlist if provided.
+6. **`core.setSecret()` on every value** (when `mask` is on).
+7. **`core.exportVariable()` each secret** (when `export-env` is on) — makes them env vars for
    later steps.
-7. Set the three outputs (`secrets-json`, `build-args`, `keys`).
-8. Print a boxed summary of **key names only** (never values) and a count.
+8. Set the three outputs (`secrets-json`, `build-args`, `keys`).
+9. Print a boxed summary of **key names only** (never values) and a count.
 
 Conventions to preserve:
 - **Mask before you expose.** `setSecret` is always called before `exportVariable`/`setOutput`
@@ -281,6 +313,10 @@ action, `keyring-js`, and `go-keyring` all break together and must change togeth
   for auto-updates. If you introduce a breaking change to inputs/outputs, that argues for a `v2`
   tag rather than moving `v1` — flag it for Aiden.
 - **Common failure modes:**
+  - *`keyring: API unavailable: … (gave up after 5 attempts)`* / *`unexpected status 522 (gave
+    up …)`* — the origin was unreachable for ~80 s straight, i.e. a real outage (WAN down, Keyring
+    down), not a blip. Check Lattice/Monitor. Earlier `::warning:: attempt N/5 failed` lines on
+    green runs are the blips the retry absorbed.
   - *`keyring: unauthorized`* — bad/inactive token, or the credentials weren't wired through
     `with:` (empty inputs). Check the GitHub secrets and the token's status in Keyring.
   - *`keyring: unexpected status 404` / `malformed response`* — almost always `url` pointing at
@@ -312,13 +348,12 @@ action, `keyring-js`, and `go-keyring` all break together and must change togeth
 
 ## Verification — always before "done"
 
-Because there are no tests, verification is mechanical but non-negotiable:
-
 ```bash
 npm install                    # if deps changed
-npm run build                  # ncc → regenerates dist/index.js from src/index.js
+npm run build                  # ncc → regenerates dist/index.js from src/*.js
 node --check src/index.js      # source syntax
 node --check dist/index.js     # SHIPPED artifact syntax — this is what runs
+npm test                       # node:test, incl. the e2e run of dist/ (must be built first)
 git status --porcelain dist/   # dist/index.js MUST show as staged/modified after a src change
 git add dist/                  # stage the rebuilt artifact
 ```
@@ -326,7 +361,7 @@ git add dist/                  # stage the rebuilt artifact
 Checklist:
 1. `src/` change → `npm run build` ran → **`dist/index.js` is regenerated and staged.** If
    `git status` shows a clean `dist/` after you edited `src/`, you forgot to build.
-2. `node --check dist/index.js` passes.
+2. `node --check dist/index.js` passes and `npm test` is green.
 3. `action.yml` inputs/outputs still match what `src/index.js` reads (`core.getInput(...)`) and
    writes (`core.setOutput(...)`). A renamed input in one place and not the other silently breaks
    consumers.
@@ -345,6 +380,8 @@ Update this AGENTS.md in the same change when you:
 - **Change the Keyring endpoint, auth scheme, or response-envelope handling** → update *Domain &
   architecture* and *How code is written here*; coordinate with `keyring-api`/`keyring-js`/
   `go-keyring`.
+- **Change what is retried, the backoff, or the timeout** → update *Retry behaviour*, the
+  inputs table, and `action.yml` descriptions.
 - **Change masking, filtering, or the env/output export behaviour** → update the masking
   warnings and the `run()` lifecycle description. This is the security-critical section.
 - **Change the build tool or the `dist/` layout** → update the `dist/` warnings and *Verification*.

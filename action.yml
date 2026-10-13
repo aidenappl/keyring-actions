@@ -28,6 +28,14 @@ inputs:
     description: "Comma-separated list of key names to export. If empty, all secrets are exported."
     required: false
     default: ""
+  retries:
+    description: "Extra attempts after the first when the fetch fails transiently (timeout, connection reset/refused, DNS, HTTP 408/429/502/503/504/520-524). 401/403/404 are never retried. 0 disables retrying. Max 10."
+    required: false
+    default: "4"
+  retry-delay-ms:
+    description: "Base backoff in milliseconds. Retry n waits a jittered value in [d/2, d] where d = min(retry-delay-ms * 2^(n-1), 30000). Max 30000."
+    required: false
+    default: "2000"
 
 outputs:
   secrets-json:

@@ -3,6 +3,10 @@ commands:
     description: Build the bundled action
     run: npm run build
     syncAfter: false
+  - name: test
+    description: Run the unit + end-to-end tests (against the built dist/)
+    run: npm run build && npm test
+    syncAfter: false
   - name: release
     description: Build, commit, and push with updated v1 tag
     run: |
