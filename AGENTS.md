@@ -31,7 +31,7 @@
 
 ## What this repo is
 
-A **JavaScript GitHub Action** (`runs.using: "node20"`) published from GitHub itself — there is
+A **JavaScript GitHub Action** (`runs.using: "node24"`, runner ≥ 2.327.1) published from GitHub itself — there is
 no npm package and no registry image. Consumers reference it by Git ref:
 
 ```yaml
@@ -51,9 +51,9 @@ GitHub Actions input/output contract.
 
 ## Stack & dependencies
 
-- **Runtime:** Node 20 (pinned by `runs.using: "node20"` in `action.yml` — this is the Actions
+- **Runtime:** Node 24 (pinned by `runs.using: "node24"` in `action.yml` — this is the Actions
   runner's bundled Node, not your local version). Local `node --check` on newer Node is fine for
-  syntax, but the runtime target is Node 20.
+  syntax, but the runtime target is Node 24 (moved from Node 20, which GitHub deprecated, in v1.0.3).
 - **Language:** plain CommonJS JavaScript (`require`, no ESM, no TypeScript). Note this differs
   from `keyring-mcp`, which is ESM — do not "modernise" one to match the other without reason.
 - **Runtime dependency:** [`@actions/core`](https://www.npmjs.com/package/@actions/core) `^1.11.0`
@@ -71,7 +71,7 @@ GitHub Actions input/output contract.
 
 | Path | Role |
 |------|------|
-| `action.yml` | **THE contract.** Declares metadata, `inputs`, `outputs`, and `runs` (Node 20 → `dist/index.js`). Editing this changes how every consumer calls the action. |
+| `action.yml` | **THE contract.** Declares metadata, `inputs`, `outputs`, and `runs` (Node 24 → `dist/index.js`). Editing this changes how every consumer calls the action. |
 | `src/index.js` | The action entrypoint: `run()` — reads inputs, masks, exports, sets outputs. |
 | `src/fetch.js` | The HTTP client: `fetchSecrets()` (with retry/backoff), `fetchOnce()`, input parsing helpers. Kept separate from `run()` so it can be unit-tested without the Actions runtime. |
 | `test/fetch.test.js` | `node:test` suite — retry/no-retry matrix, backoff math, log-leak check, and an end-to-end run of `dist/index.js`. |
@@ -124,7 +124,7 @@ compared against the literal string `"false"`.
 
 ```yaml
 runs:
-  using: "node20"
+  using: "node24"
   main: "dist/index.js"
 ```
 
@@ -250,7 +250,7 @@ GitHub workflow step
       │  uses: aidenappl/keyring-actions@v1
       │  with: url, access-key-id, secret-access-key
       ▼
-dist/index.js  (Node 20, on the runner)
+dist/index.js  (Node 24, on the runner)
       │  GET https://keys.appleby.cloud/secrets
       │  Authorization: Basic base64(access:secret)
       ▼
